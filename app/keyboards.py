@@ -13,6 +13,7 @@ def consent_kb() -> InlineKeyboardMarkup:
 def menu_kb() -> ReplyKeyboardMarkup:
     b = ReplyKeyboardBuilder()
     b.add(
+        KeyboardButton(text="✨ Астропрофиль (MVP)"),
         KeyboardButton(text="💳 Платная услуга"),
         KeyboardButton(text="💡 Предложение"),
         KeyboardButton(text="😡 Жалоба"),
@@ -77,6 +78,50 @@ def rating_kb(request_id: int) -> InlineKeyboardMarkup:
     for i in range(1,6):
         b.button(text=f"⭐ {i}", callback_data=f"rate|{request_id}|{i}")
     b.adjust(5)
+    return b.as_markup()
+
+
+def astro_time_mode_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Знаю точное время", callback_data="astro_time|EXACT")
+    b.button(text="⚠️ Примерно (±30–60 мин)", callback_data="astro_time|APPROX")
+    b.button(text="🟡 Не знаю время", callback_data="astro_time|UNKNOWN")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def astro_goal_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for goal in ("Отношения", "Карьера", "Деньги", "Самореализация", "Период", "Другое"):
+        b.button(text=goal, callback_data=f"astro_goal|{goal}")
+    b.adjust(2)
+    return b.as_markup()
+
+
+def astro_tz_confirm_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="Да, верно", callback_data="astro_tz|yes")
+    b.button(text="Исправить", callback_data="astro_tz|edit")
+    b.adjust(2)
+    return b.as_markup()
+
+
+def astro_confirm_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Да", callback_data="astro_confirm|yes")
+    b.button(text="✏️ Исправить", callback_data="astro_confirm|edit")
+    b.adjust(2)
+    return b.as_markup()
+
+
+def astro_packages_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="Личность и предназначение", callback_data="astro_pack|personality")
+    b.button(text="Отношения", callback_data="astro_pack|relationships")
+    b.button(text="Карьера и деньги", callback_data="astro_pack|career")
+    b.button(text="Сильные периоды 3/6/12", callback_data="astro_pack|periods")
+    b.button(text="Совместимость (синастрия)", callback_data="astro_pack|synastry")
+    b.adjust(1)
     return b.as_markup()
 
 def admin_status_kb(request_id: int) -> InlineKeyboardMarkup:

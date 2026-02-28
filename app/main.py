@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, date, time
+import re
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -14,7 +15,8 @@ from .db import DB
 from . import texts
 from .keyboards import (
     consent_kb, menu_kb, address_kb, categories_kb, services_kb, dates_kb,
-    slots_kb, phone_kb, rating_kb, admin_status_kb, price_confirm_kb
+    slots_kb, phone_kb, rating_kb, admin_status_kb, price_confirm_kb,
+    astro_time_mode_kb, astro_goal_kb, astro_tz_confirm_kb, astro_confirm_kb, astro_packages_kb
 )
 from .utils import date_range, generate_slots, parse_hhmm, normalize_phone, STATUS_LABEL
 
@@ -97,6 +99,85 @@ async def build_group_card_full(req: dict) -> str:
 
 
 # ---------- Bot ----------
+
+
+def parse_birth_date(raw: str) -> date | None:
+    try:
+        return datetime.strptime(raw.strip(), "%d.%m.%Y").date()
+    except ValueError:
+        return None
+
+
+def parse_timezone(raw: str) -> str | None:
+    value = raw.strip().upper().replace(" ", "")
+    if re.fullmatch(r"UTC[+-](?:[0-9]|1[0-4])", value):
+        return value
+    return None
+
+
+def zodiac_sign(birth_date: date) -> str:
+    m, d = birth_date.month, birth_date.day
+    signs = [
+        ((1, 20), "Козерог"), ((2, 19), "Водолей"), ((3, 21), "Рыбы"), ((4, 20), "Овен"),
+        ((5, 21), "Телец"), ((6, 21), "Близнецы"), ((7, 23), "Рак"), ((8, 23), "Лев"),
+        ((9, 23), "Дева"), ((10, 23), "Весы"), ((11, 22), "Скорпион"), ((12, 22), "Стрелец"),
+        ((12, 32), "Козерог"),
+    ]
+    for (sm, sd), sign in signs:
+        if (m, d) < (sm, sd):
+            return sign
+    return "Козерог"
+
+
+def pseudo_moon_sign(birth_date: date) -> str:
+    moon = ["Овен", "Телец", "Близнецы", "Рак", "Лев", "Дева", "Весы", "Скорпион", "Стрелец", "Козерог", "Водолей", "Рыбы"]
+    idx = (birth_date.toordinal() // 3) % len(moon)
+    return moon[idx]
+
+
+def build_astro_passport(d: dict) -> str:
+    birth_date = date.fromisoformat(d["birth_date"])
+    sun = zodiac_sign(birth_date)
+    moon = pseudo_moon_sign(birth_date)
+    mode = d.get("birth_time_mode")
+    asc = "не рассчитывается в режиме без времени" if mode == "UNKNOWN" else f"условно {sun}"
+    goal = d.get("goal", "Самореализация")
+
+    strengths = {
+        "Овен": "инициативность и смелые старты",
+        "Телец": "устойчивость и умение доводить до результата",
+        "Близнецы": "гибкость мышления и коммуникация",
+        "Рак": "эмпатия и внутренняя чуткость",
+        "Лев": "харизма и лидерский импульс",
+        "Дева": "системность и внимание к деталям",
+        "Весы": "дипломатия и баланс интересов",
+        "Скорпион": "глубина и трансформационная сила",
+        "Стрелец": "видение перспективы и вера",
+        "Козерог": "дисциплина и стратегичность",
+        "Водолей": "оригинальность и независимость",
+        "Рыбы": "интуиция и образное мышление",
+    }
+    blind = {
+        "Отношения": "идеализация партнера вместо честного диалога",
+        "Карьера": "переработка и завышенная планка к себе",
+        "Деньги": "эмоциональные решения вместо стратегии",
+        "Самореализация": "страх публичности и откладывание первых шагов",
+        "Период": "расфокус на множестве задач",
+        "Другое": "недооценка своих ресурсов",
+    }
+    month_theme = f"наводить порядок в теме «{goal.lower()}» и фиксировать промежуточные результаты"
+    mini_insight = "ваш быстрый рост начинается там, где вы называете цель вслух и делите её на 3 шага"
+
+    return texts.ASTRO_PASSPORT.format(
+        sun=sun,
+        moon=moon,
+        asc=asc,
+        strength=strengths.get(sun, "внутренняя опора и адаптивность"),
+        blind_spot=blind.get(goal, blind["Другое"]),
+        month_theme=month_theme,
+        mini_insight=mini_insight,
+    )
+
 async def on_startup(bot: Bot):
     await db.connect()
     await db.execute_sql_file("migrations/001_init.sql")
@@ -130,6 +211,13 @@ async def menu_message(message: Message):
         return
 
     txt = (message.text or "").strip()
+    if txt == "✨ Астропрофиль (MVP)":
+        d = new_draft("ASTRO_BIRTH_DATE")
+        await db.upsert_draft(uid, d)
+        await message.answer(texts.ASTRO_WELCOME, parse_mode=ParseMode.MARKDOWN)
+        await message.answer(texts.ASTRO_DISCLAIMER)
+        await message.answer(texts.ASTRO_ASK_BIRTH_DATE)
+        return
     if txt == "💳 Платная услуга":
         d = new_draft("PAID_ADDRESS")
         await db.upsert_draft(uid, d)
@@ -268,7 +356,7 @@ async def slot_cb(call: CallbackQuery):
 
 async def text_router(message: Message, bot: Bot):
     uid = message.from_user.id
-    if message.text and message.text.strip() in ("💳 Платная услуга", "💡 Предложение", "😡 Жалоба", "⬅️ В меню"):
+    if message.text and message.text.strip() in ("✨ Астропрофиль (MVP)", "💳 Платная услуга", "💡 Предложение", "😡 Жалоба", "⬅️ В меню"):
         return await menu_message(message)
 
     d = await db.get_draft(uid)
@@ -306,6 +394,58 @@ async def text_router(message: Message, bot: Bot):
                 parse_mode=ParseMode.MARKDOWN,
             )
         await message.answer(texts.PRICE_PENDING_TO_ADMIN.format(id=rid), reply_markup=menu_kb())
+        return
+
+    # ASTRO MVP flow
+    if step == "ASTRO_BIRTH_DATE":
+        bdate = parse_birth_date(message.text or "")
+        if not bdate:
+            await message.answer("Неверный формат даты. Пример: 12.03.1991")
+            return
+        d["birth_date"] = bdate.isoformat()
+        d["step"] = "ASTRO_TIME_MODE"
+        await db.upsert_draft(uid, d)
+        await message.answer(texts.ASTRO_ASK_TIME_MODE, reply_markup=astro_time_mode_kb())
+        return
+
+    if step == "ASTRO_BIRTH_TIME":
+        raw_time = (message.text or "").strip()
+        t = None
+        if re.fullmatch(r"\d{2}:\d{2}", raw_time):
+            try:
+                t = parse_hhmm(raw_time)
+            except ValueError:
+                t = None
+        if not t:
+            await message.answer("Укажите время в формате ЧЧ:ММ, например 14:25")
+            return
+        d["birth_time"] = t.strftime("%H:%M")
+        d["step"] = "ASTRO_BIRTH_PLACE"
+        await db.upsert_draft(uid, d)
+        await message.answer(texts.ASTRO_ASK_BIRTH_PLACE)
+        return
+
+    if step == "ASTRO_BIRTH_PLACE":
+        place = (message.text or "").strip()
+        if "," not in place or len(place) < 6:
+            await message.answer("Укажите в формате «город, страна», например: Казань, Россия")
+            return
+        d["birth_place"] = place
+        d["step"] = "ASTRO_TIMEZONE"
+        d.setdefault("timezone", "UTC+3")
+        await db.upsert_draft(uid, d)
+        await message.answer(f"Я определил {d['timezone']}, верно?", reply_markup=astro_tz_confirm_kb())
+        return
+
+    if step == "ASTRO_TIMEZONE":
+        tz = parse_timezone(message.text or "")
+        if not tz:
+            await message.answer("Введите часовой пояс в формате UTC+3 или UTC-5")
+            return
+        d["timezone"] = tz
+        d["step"] = "ASTRO_GOAL"
+        await db.upsert_draft(uid, d)
+        await message.answer(texts.ASTRO_ASK_GOAL, reply_markup=astro_goal_kb())
         return
 
     # FEEDBACK
@@ -632,6 +772,99 @@ async def rate_cb(call: CallbackQuery, bot: Bot):
     await call.message.answer("Спасибо! Теперь оставьте комментарий (или напишите «-», если без комментария):")
     await call.answer()
 
+
+
+async def astro_time_cb(call: CallbackQuery):
+    uid = call.from_user.id
+    mode = call.data.split("|", 1)[1]
+    d = await db.get_draft(uid) or new_draft("ASTRO_TIME_MODE")
+    d["birth_time_mode"] = mode
+    if mode == "UNKNOWN":
+        d["birth_time"] = "unknown"
+        d["step"] = "ASTRO_BIRTH_PLACE"
+        await db.upsert_draft(uid, d)
+        await call.message.answer(texts.ASTRO_PRECISION_UNKNOWN)
+        await call.message.answer(texts.ASTRO_ASK_BIRTH_PLACE)
+        await call.answer()
+        return
+    d["step"] = "ASTRO_BIRTH_TIME"
+    await db.upsert_draft(uid, d)
+    await call.message.answer(texts.ASTRO_PRECISION_EXACT if mode == "EXACT" else texts.ASTRO_PRECISION_APPROX)
+    await call.message.answer(texts.ASTRO_ASK_BIRTH_TIME if mode == "EXACT" else texts.ASTRO_ASK_BIRTH_TIME_APPROX)
+    await call.answer()
+
+
+async def astro_tz_cb(call: CallbackQuery):
+    uid = call.from_user.id
+    decision = call.data.split("|", 1)[1]
+    d = await db.get_draft(uid) or {}
+    if decision == "yes":
+        d["step"] = "ASTRO_GOAL"
+        await db.upsert_draft(uid, d)
+        await call.message.answer(texts.ASTRO_ASK_GOAL, reply_markup=astro_goal_kb())
+        await call.answer("Принято")
+        return
+    d["step"] = "ASTRO_TIMEZONE"
+    await db.upsert_draft(uid, d)
+    await call.message.answer(texts.ASTRO_ASK_TZ)
+    await call.answer()
+
+
+async def astro_goal_cb(call: CallbackQuery):
+    uid = call.from_user.id
+    goal = call.data.split("|", 1)[1]
+    d = await db.get_draft(uid) or {}
+    d["goal"] = goal
+    d["step"] = "ASTRO_CONFIRM"
+    await db.upsert_draft(uid, d)
+    time_mode = d.get("birth_time_mode", "UNKNOWN")
+    if time_mode == "UNKNOWN":
+        time_label = "не знаю"
+    elif time_mode == "APPROX":
+        time_label = f"{d.get('birth_time', '—')} (примерно)"
+    else:
+        time_label = d.get("birth_time", "—")
+    await call.message.answer(
+        texts.ASTRO_CONFIRM.format(
+            birth_date=date.fromisoformat(d['birth_date']).strftime('%d.%m.%Y'),
+            birth_time_label=time_label,
+            birth_place=d.get('birth_place', '—'),
+            timezone=d.get('timezone', 'UTC+3'),
+            goal=goal,
+        )
+    )
+    await call.message.answer("Подтвердите данные:", reply_markup=astro_confirm_kb())
+    await call.answer()
+
+
+
+
+async def astro_confirm_cb(call: CallbackQuery):
+    uid = call.from_user.id
+    decision = call.data.split("|", 1)[1]
+    d = await db.get_draft(uid) or {}
+    if decision == "edit":
+        d["step"] = "ASTRO_BIRTH_DATE"
+        await db.upsert_draft(uid, d)
+        await call.message.answer("Хорошо, начнем заново.")
+        await call.message.answer(texts.ASTRO_ASK_BIRTH_DATE)
+        await call.answer()
+        return
+
+    if not d.get("birth_date") or not d.get("birth_place"):
+        await call.answer("Данные профиля не найдены. Начните заново.", show_alert=True)
+        return
+
+    passport = build_astro_passport(d)
+    await call.message.answer(passport, parse_mode=ParseMode.MARKDOWN)
+    await call.message.answer(texts.ASTRO_PROFILE_SAVED)
+    await call.message.answer("Выберите расклад:", reply_markup=astro_packages_kb())
+    await db.clear_draft(uid)
+    await call.answer("Готово")
+
+async def astro_pack_cb(call: CallbackQuery):
+    await call.answer("Пакет сохранен. Скоро откроем оплату в боте.")
+
 async def router_minus_comment(message: Message, bot: Bot):
     # helper: allow '-' as skip
     uid = message.from_user.id
@@ -678,6 +911,11 @@ async def main():
     dp.callback_query.register(status_cb, F.data.startswith("status|"))
     dp.callback_query.register(rate_cb, F.data.startswith("rate|"))
     dp.callback_query.register(price_cb, F.data.startswith("price|"))
+    dp.callback_query.register(astro_time_cb, F.data.startswith("astro_time|"))
+    dp.callback_query.register(astro_tz_cb, F.data.startswith("astro_tz|"))
+    dp.callback_query.register(astro_goal_cb, F.data.startswith("astro_goal|"))
+    dp.callback_query.register(astro_confirm_cb, F.data.startswith("astro_confirm|"))
+    dp.callback_query.register(astro_pack_cb, F.data.startswith("astro_pack|"))
 
     dp.message.register(contact_router, F.contact)
     dp.message.register(text_router)
