@@ -86,3 +86,11 @@ def admin_status_kb(request_id: int) -> InlineKeyboardMarkup:
     b.button(text="📦 Архив", callback_data=f"status|{request_id}|ARCHIVED")
     b.adjust(3)
     return b.as_markup()
+
+
+def price_confirm_kb(request_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Подтвердить", callback_data=f"price|{request_id}|confirm")
+    b.button(text="❌ Не согласен", callback_data=f"price|{request_id}|reject")
+    b.adjust(2)
+    return b.as_markup()

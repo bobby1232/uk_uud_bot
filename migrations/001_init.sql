@@ -52,9 +52,18 @@ CREATE TABLE IF NOT EXISTS requests (
     awaiting_rating BOOLEAN NOT NULL DEFAULT FALSE,
     group_chat_id BIGINT,
     group_message_id BIGINT,
+    pending_status TEXT,
+    pending_price_rub INT,
+    pending_status_requested_at TIMESTAMPTZ,
+    pending_status_requested_by BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS pending_status TEXT;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS pending_price_rub INT;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS pending_status_requested_at TIMESTAMPTZ;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS pending_status_requested_by BIGINT;
 
 CREATE INDEX IF NOT EXISTS idx_requests_user ON requests(telegram_user_id);
 CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
@@ -76,6 +85,16 @@ CREATE TABLE IF NOT EXISTS request_ratings (
     comment TEXT,
     rated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS request_status_history (
+    id BIGSERIAL PRIMARY KEY,
+    request_id BIGINT NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    changed_by BIGINT
+);
+
+CREATE INDEX IF NOT EXISTS idx_request_status_history_request ON request_status_history(request_id, changed_at DESC);
 
 CREATE TABLE IF NOT EXISTS draft_requests (
     telegram_user_id BIGINT PRIMARY KEY,

@@ -14,7 +14,7 @@ from .db import DB
 from . import texts
 from .keyboards import (
     consent_kb, menu_kb, address_kb, categories_kb, services_kb, dates_kb,
-    slots_kb, phone_kb, rating_kb, admin_status_kb
+    slots_kb, phone_kb, rating_kb, admin_status_kb, price_confirm_kb
 )
 from .utils import date_range, generate_slots, parse_hhmm, normalize_phone, STATUS_LABEL
 
@@ -29,6 +29,11 @@ def new_draft(step: str) -> dict:
 
 def draft_step(d: dict | None) -> str | None:
     return d.get("step") if d else None
+
+def format_dt_ru(dt: datetime | None) -> str:
+    if not dt:
+        return "—"
+    return dt.strftime("%d.%m.%Y %H:%M")
 
 def build_group_card(req: dict, slots: list[tuple[str,str]], rating: dict | None) -> str:
     status_label = STATUS_LABEL.get(req["status"], req["status"])
@@ -58,6 +63,7 @@ async def fetch_profile(telegram_user_id: int) -> tuple[str|None, str|None]:
 async def build_group_card_full(req: dict) -> str:
     slots = await db.get_request_slots(req["id"])
     rating = await db.get_request_rating(req["id"])
+    history = await db.get_request_status_history(req["id"])
     status_label = STATUS_LABEL.get(req["status"], req["status"])
     full_name, phone = await fetch_profile(req["telegram_user_id"])
     lines = []
@@ -70,10 +76,17 @@ async def build_group_card_full(req: dict) -> str:
     lines.append(f"Дата: {req['booking_date'].strftime('%d.%m.%Y')}")
     lines.append('Интервалы: ' + ", ".join([f"{a}–{b}" for a,b in slots]))
     lines.append(f"Сумма: {req['price_snapshot_rub']} ₽")
+    if req.get("pending_status") == "IN_PROGRESS" and req.get("pending_price_rub"):
+        asked_at = format_dt_ru(req.get("pending_status_requested_at"))
+        lines.append(f"⏳ Ожидает подтверждения клиента: {req['pending_price_rub']} ₽ (запрошено {asked_at})")
     if full_name:
         lines.append(f"Клиент: {full_name}")
     if phone:
         lines.append(f"Телефон: {phone}")
+    if history:
+        lines.append("История статусов:")
+        for item in history:
+            lines.append(f"• {STATUS_LABEL.get(item['status'], item['status'])}: {format_dt_ru(item['changed_at'])}")
     if rating:
         comment = (rating.get("comment") or "").strip()
         if comment:
@@ -81,6 +94,7 @@ async def build_group_card_full(req: dict) -> str:
         else:
             lines.append(f"Оценка: {rating['stars']}/5")
     return "\n".join(lines)
+
 
 # ---------- Bot ----------
 async def on_startup(bot: Bot):
@@ -259,6 +273,40 @@ async def text_router(message: Message, bot: Bot):
 
     d = await db.get_draft(uid)
     step = draft_step(d)
+
+    # ADMIN: adjusted price for status change
+    if step == "ADMIN_ADJUST_PRICE":
+        if not await db.is_admin(uid):
+            await db.clear_draft(uid)
+            await message.answer("Недостаточно прав.")
+            return
+        raw = (message.text or "").replace(" ", "").replace("₽", "")
+        if not raw.isdigit() or int(raw) <= 0:
+            await message.answer("Введите сумму в рублях, например: 1500")
+            return
+        rid = int(d.get("request_id"))
+        pending_status = d.get("pending_status", "IN_PROGRESS")
+        price = int(raw)
+        await db.set_pending_status_with_price(rid, pending_status, price, uid)
+        await db.clear_draft(uid)
+        req = await db.get_request(rid)
+        if req:
+            await bot.send_message(
+                req["telegram_user_id"],
+                texts.PRICE_CONFIRM_REQUEST.format(id=rid, price=price),
+                reply_markup=price_confirm_kb(rid),
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            card = await build_group_card_full(req)
+            await bot.edit_message_text(
+                card,
+                chat_id=req["group_chat_id"] or message.chat.id,
+                message_id=req["group_message_id"],
+                reply_markup=admin_status_kb(rid),
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        await message.answer(texts.PRICE_PENDING_TO_ADMIN.format(id=rid), reply_markup=menu_kb())
+        return
 
     # FEEDBACK
     if step == "FEEDBACK_TEXT":
@@ -471,10 +519,20 @@ async def status_cb(call: CallbackQuery, bot: Bot):
         await call.answer("Заявка не найдена", show_alert=True)
         return
 
-    await db.update_status(rid, status)
+    if status == "IN_PROGRESS":
+        d = new_draft("ADMIN_ADJUST_PRICE")
+        d["request_id"] = rid
+        d["pending_status"] = status
+        await db.upsert_draft(call.from_user.id, d)
+        await call.message.answer(
+            f"Введите скорректированную сумму для заявки №{rid} (в рублях):"
+        )
+        await call.answer("Ожидаю сумму")
+        return
+
+    await db.update_status(rid, status, changed_by=call.from_user.id)
     req = await db.get_request(rid)
 
-    # Update group card (edit)
     card = await build_group_card_full(req)
     try:
         await bot.edit_message_text(
@@ -482,27 +540,75 @@ async def status_cb(call: CallbackQuery, bot: Bot):
             chat_id=req["group_chat_id"] or call.message.chat.id,
             message_id=req["group_message_id"] or call.message.message_id,
             reply_markup=admin_status_kb(rid),
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode=ParseMode.MARKDOWN,
         )
     except Exception as e:
         log.warning("Failed to edit group message: %s", e)
 
-    # Notify user
     await bot.send_message(
         req["telegram_user_id"],
         texts.STATUS_CHANGED.format(id=rid, status=STATUS_LABEL.get(status, status)),
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode=ParseMode.MARKDOWN,
     )
 
-    # If DONE -> ask rating
     if status == "DONE":
         await bot.send_message(
             req["telegram_user_id"],
             texts.RATE_TEXT.format(id=rid),
-            reply_markup=rating_kb(rid)
+            reply_markup=rating_kb(rid),
         )
 
     await call.answer("Ок")
+
+
+async def price_cb(call: CallbackQuery, bot: Bot):
+    _, rid_s, decision = call.data.split("|")
+    rid = int(rid_s)
+
+    req = await db.get_request(rid)
+    if not req or req["telegram_user_id"] != call.from_user.id:
+        await call.answer("Недоступно", show_alert=True)
+        return
+
+    if not req.get("pending_status") or req.get("pending_status") != "IN_PROGRESS":
+        await call.answer("Запрос уже обработан", show_alert=True)
+        return
+
+    if decision == "confirm":
+        await db.confirm_pending_status(rid, changed_by=call.from_user.id)
+        req = await db.get_request(rid)
+        await call.message.answer(texts.PRICE_CONFIRMED_TO_CLIENT.format(id=rid), parse_mode=ParseMode.MARKDOWN)
+        await bot.send_message(
+            req["group_chat_id"],
+            f"Клиент подтвердил сумму {req['price_snapshot_rub']} ₽ по заявке №{rid}.",
+        )
+        card = await build_group_card_full(req)
+        await bot.edit_message_text(
+            card,
+            chat_id=req["group_chat_id"],
+            message_id=req["group_message_id"],
+            reply_markup=admin_status_kb(rid),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        await call.answer("Подтверждено")
+        return
+
+    admin_id = req.get("pending_status_requested_by")
+    await db.clear_pending_status(rid)
+    req = await db.get_request(rid)
+    await call.message.answer(texts.PRICE_REJECTED_TO_CLIENT.format(id=rid))
+    if admin_id:
+        await bot.send_message(admin_id, texts.PRICE_REJECTED_TO_ADMIN.format(id=rid))
+    card = await build_group_card_full(req)
+    await bot.edit_message_text(
+        card,
+        chat_id=req["group_chat_id"],
+        message_id=req["group_message_id"],
+        reply_markup=admin_status_kb(rid),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    await call.answer("Отклонено")
+
 
 async def rate_cb(call: CallbackQuery, bot: Bot):
     uid = call.from_user.id
@@ -571,6 +677,7 @@ async def main():
     dp.callback_query.register(slot_cb, F.data.startswith("slot|"))
     dp.callback_query.register(status_cb, F.data.startswith("status|"))
     dp.callback_query.register(rate_cb, F.data.startswith("rate|"))
+    dp.callback_query.register(price_cb, F.data.startswith("price|"))
 
     dp.message.register(contact_router, F.contact)
     dp.message.register(text_router)
