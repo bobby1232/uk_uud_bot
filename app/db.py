@@ -135,7 +135,19 @@ class DB:
         )
         if not r:
             return None
-        return dict(r["payload"])
+        payload = r["payload"]
+
+        if isinstance(payload, dict):
+            return payload
+
+        if isinstance(payload, str):
+            decoded = json.loads(payload)
+            if isinstance(decoded, dict):
+                return decoded
+            return None
+
+        # Fallback for legacy/invalid values that cannot be used as a draft object.
+        return None
 
     async def upsert_draft(self, telegram_user_id: int, payload: dict[str, Any]):
         assert self.pool
