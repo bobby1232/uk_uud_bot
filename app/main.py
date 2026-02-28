@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, date, time
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Message, CallbackQuery
 from aiogram.enums import ParseMode
 
@@ -550,7 +551,10 @@ async def router_minus_comment(message: Message, bot: Bot):
     return False
 
 async def main():
-    bot = Bot(settings.BOT_TOKEN, parse_mode=ParseMode.MARKDOWN)
+    bot = Bot(
+        settings.BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
+    )
     dp = Dispatcher()
 
     dp.startup.register(on_startup)
