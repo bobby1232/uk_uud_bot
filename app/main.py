@@ -524,10 +524,15 @@ async def status_cb(call: CallbackQuery, bot: Bot):
         d["request_id"] = rid
         d["pending_status"] = status
         await db.upsert_draft(call.from_user.id, d)
-        await call.message.answer(
-            f"Введите скорректированную сумму для заявки №{rid} (в рублях):"
-        )
-        await call.answer("Ожидаю сумму")
+        prompt = f"Введите скорректированную сумму для заявки №{rid} (в рублях):"
+        # В группах с privacy-mode бот не всегда получает обычные текстовые сообщения.
+        # Поэтому дублируем запрос в личный чат администратора.
+        try:
+            await bot.send_message(call.from_user.id, prompt)
+            await call.answer("Ожидаю сумму в личных сообщениях")
+        except Exception:
+            await call.message.answer(prompt)
+            await call.answer("Ожидаю сумму")
         return
 
     await db.update_status(rid, status, changed_by=call.from_user.id)
