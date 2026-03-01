@@ -288,11 +288,22 @@ async def slot_cb(call: CallbackQuery):
 
 async def text_router(message: Message, bot: Bot):
     uid = message.from_user.id
+
+    # Let user enter with any first message: show consent/menu without requiring /start.
+    if not await db.has_consent(uid):
+        await message.answer(texts.WELCOME_TEXT)
+        await message.answer(texts.CONSENT_TEXT, reply_markup=consent_kb())
+        return
+
     if message.text and message.text.strip() in ("💳 Платная услуга", "💡 Предложение", "😡 Жалоба", "⬅️ В меню"):
         return await menu_message(message)
 
     d = await db.get_draft(uid)
     step = draft_step(d)
+
+    if not step:
+        await message.answer(texts.MENU_TEXT, reply_markup=menu_kb())
+        return
 
     # ADMIN: adjusted price for status change
     if step == "ADMIN_ADJUST_PRICE":
