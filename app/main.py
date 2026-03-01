@@ -109,6 +109,7 @@ async def on_shutdown(bot: Bot):
 
 async def cmd_start(message: Message, bot: Bot):
     uid = message.from_user.id
+    await message.answer(texts.WELCOME_TEXT)
     if not await db.has_consent(uid):
         await message.answer(texts.CONSENT_TEXT, reply_markup=consent_kb())
         return
