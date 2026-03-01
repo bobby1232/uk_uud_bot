@@ -296,7 +296,12 @@ class DB:
                 )
 
     async def set_pending_status_with_price(
-        self, request_id: int, pending_status: str, pending_price_rub: int, requested_by: int
+        self,
+        request_id: int,
+        pending_status: str,
+        pending_price_rub: int,
+        requested_by: int,
+        pending_planned_at: Optional[datetime] = None,
     ):
         assert self.pool
         await self.pool.execute(
@@ -305,12 +310,14 @@ class DB:
                       pending_price_rub=$3,
                       pending_status_requested_by=$4,
                       pending_status_requested_at=NOW(),
+                      pending_planned_at=$5,
                       updated_at=NOW()
                 WHERE id=$1""",
             request_id,
             pending_status,
             pending_price_rub,
             requested_by,
+            pending_planned_at,
         )
 
     async def clear_pending_status(self, request_id: int):
@@ -321,6 +328,7 @@ class DB:
                       pending_price_rub=NULL,
                       pending_status_requested_by=NULL,
                       pending_status_requested_at=NULL,
+                      pending_planned_at=NULL,
                       updated_at=NOW()
                 WHERE id=$1""",
             request_id,
@@ -331,7 +339,7 @@ class DB:
         async with self.pool.acquire() as con:
             async with con.transaction():
                 req = await con.fetchrow(
-                    "SELECT pending_status, pending_price_rub FROM requests WHERE id=$1", request_id
+                    "SELECT pending_status, pending_price_rub, pending_planned_at FROM requests WHERE id=$1", request_id
                 )
                 if not req or not req["pending_status"]:
                     return
@@ -343,16 +351,19 @@ class DB:
                     """UPDATE requests
                           SET status=$2,
                               price_snapshot_rub=COALESCE($3, price_snapshot_rub),
-                              awaiting_rating=$4,
+                              planned_at=COALESCE($4, planned_at),
+                              awaiting_rating=$5,
                               pending_status=NULL,
                               pending_price_rub=NULL,
                               pending_status_requested_by=NULL,
                               pending_status_requested_at=NULL,
+                              pending_planned_at=NULL,
                               updated_at=NOW()
                         WHERE id=$1""",
                     request_id,
                     status,
                     req["pending_price_rub"],
+                    req["pending_planned_at"],
                     awaiting,
                 )
                 await con.execute(

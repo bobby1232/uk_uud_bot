@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS requests (
     pending_price_rub INT,
     pending_status_requested_at TIMESTAMPTZ,
     pending_status_requested_by BIGINT,
+    planned_at TIMESTAMPTZ,
+    pending_planned_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -64,6 +66,8 @@ ALTER TABLE requests ADD COLUMN IF NOT EXISTS pending_status TEXT;
 ALTER TABLE requests ADD COLUMN IF NOT EXISTS pending_price_rub INT;
 ALTER TABLE requests ADD COLUMN IF NOT EXISTS pending_status_requested_at TIMESTAMPTZ;
 ALTER TABLE requests ADD COLUMN IF NOT EXISTS pending_status_requested_by BIGINT;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS planned_at TIMESTAMPTZ;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS pending_planned_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_requests_user ON requests(telegram_user_id);
 CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
