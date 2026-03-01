@@ -35,6 +35,15 @@ def format_dt_ru(dt: datetime | None) -> str:
         return "—"
     return dt.strftime("%d.%m.%Y %H:%M")
 
+def parse_planned_at(raw: str) -> datetime | None:
+    cleaned = " ".join((raw or "").strip().split())
+    for fmt in ("%d.%m.%Y %H:%M", "%d.%m.%y %H:%M"):
+        try:
+            return datetime.strptime(cleaned, fmt)
+        except ValueError:
+            continue
+    return None
+
 def build_group_card(req: dict, slots: list[tuple[str,str]], rating: dict | None) -> str:
     status_label = STATUS_LABEL.get(req["status"], req["status"])
     lines = []
@@ -47,6 +56,8 @@ def build_group_card(req: dict, slots: list[tuple[str,str]], rating: dict | None
     lines.append(f"Дата: {req['booking_date'].strftime('%d.%m.%Y')}")
     lines.append('Интервалы: ' + ", ".join([f"{a}–{b}" for a,b in slots]))
     lines.append(f"Сумма: {req['price_snapshot_rub']} ₽")
+    if req.get("planned_at"):
+        lines.append(f"Дата и время работ: {format_dt_ru(req['planned_at'])}")
     # profile fields aren't stored on request; they live in user_profiles. But we captured them in draft during create.
     # For group card we rely on snapshots stored nowhere; simplest: store in request via address_label only.
     # Workaround: draft includes full_name/phone, but after create it's gone.
@@ -76,9 +87,17 @@ async def build_group_card_full(req: dict) -> str:
     lines.append(f"Дата: {req['booking_date'].strftime('%d.%m.%Y')}")
     lines.append('Интервалы: ' + ", ".join([f"{a}–{b}" for a,b in slots]))
     lines.append(f"Сумма: {req['price_snapshot_rub']} ₽")
+    if req.get("planned_at"):
+        lines.append(f"Дата и время работ: {format_dt_ru(req['planned_at'])}")
     if req.get("pending_status") == "IN_PROGRESS" and req.get("pending_price_rub"):
         asked_at = format_dt_ru(req.get("pending_status_requested_at"))
-        lines.append(f"⏳ Ожидает подтверждения клиента: {req['pending_price_rub']} ₽ (запрошено {asked_at})")
+        planned = req.get("pending_planned_at")
+        if planned:
+            lines.append(
+                f"⏳ Ожидает подтверждения клиента: {req['pending_price_rub']} ₽, {format_dt_ru(planned)} (запрошено {asked_at})"
+            )
+        else:
+            lines.append(f"⏳ Ожидает подтверждения клиента: {req['pending_price_rub']} ₽ (запрошено {asked_at})")
     if full_name:
         lines.append(f"Клиент: {full_name}")
     if phone:
@@ -284,16 +303,33 @@ async def text_router(message: Message, bot: Bot):
         if not raw.isdigit() or int(raw) <= 0:
             await message.answer("Введите сумму в рублях, например: 1500")
             return
+        d["pending_price_rub"] = int(raw)
+        d["step"] = "ADMIN_ADJUST_DATETIME"
+        await db.upsert_draft(uid, d)
+        await message.answer(
+            f"Введите дату и время выполнения для заявки №{int(d.get('request_id'))} в формате ДД.ММ.ГГГГ ЧЧ:ММ (например, 25.04.2026 14:30):"
+        )
+        return
+
+    if step == "ADMIN_ADJUST_DATETIME":
+        if not await db.is_admin(uid):
+            await db.clear_draft(uid)
+            await message.answer("Недостаточно прав.")
+            return
+        planned_at = parse_planned_at(message.text or "")
+        if not planned_at:
+            await message.answer("Неверный формат. Укажите дату и время как ДД.ММ.ГГГГ ЧЧ:ММ, например: 25.04.2026 14:30")
+            return
         rid = int(d.get("request_id"))
         pending_status = d.get("pending_status", "IN_PROGRESS")
-        price = int(raw)
-        await db.set_pending_status_with_price(rid, pending_status, price, uid)
+        price = int(d.get("pending_price_rub"))
+        await db.set_pending_status_with_price(rid, pending_status, price, uid, planned_at)
         await db.clear_draft(uid)
         req = await db.get_request(rid)
         if req:
             await bot.send_message(
                 req["telegram_user_id"],
-                texts.PRICE_CONFIRM_REQUEST.format(id=rid, price=price),
+                texts.PRICE_CONFIRM_REQUEST.format(id=rid, price=price, planned_at=format_dt_ru(planned_at)),
                 reply_markup=price_confirm_kb(rid),
                 parse_mode=ParseMode.MARKDOWN,
             )
@@ -583,9 +619,10 @@ async def price_cb(call: CallbackQuery, bot: Bot):
         await db.confirm_pending_status(rid, changed_by=call.from_user.id)
         req = await db.get_request(rid)
         await call.message.answer(texts.PRICE_CONFIRMED_TO_CLIENT.format(id=rid), parse_mode=ParseMode.MARKDOWN)
+        planned_info = f", дата и время: {format_dt_ru(req.get('planned_at'))}" if req.get('planned_at') else ""
         await bot.send_message(
             req["group_chat_id"],
-            f"Клиент подтвердил сумму {req['price_snapshot_rub']} ₽ по заявке №{rid}.",
+            f"Клиент подтвердил сумму {req['price_snapshot_rub']} ₽{planned_info} по заявке №{rid}.",
         )
         card = await build_group_card_full(req)
         await bot.edit_message_text(
