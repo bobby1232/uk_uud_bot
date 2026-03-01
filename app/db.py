@@ -92,7 +92,14 @@ class DB:
 
     async def list_categories(self) -> list[tuple[int, str]]:
         assert self.pool
-        rows = await self.pool.fetch("SELECT id, name FROM service_categories ORDER BY name")
+        rows = await self.pool.fetch(
+            """
+            SELECT id, name
+              FROM service_categories
+             ORDER BY CASE WHEN lower(trim(name)) = 'другое' THEN 1 ELSE 0 END,
+                      name
+            """
+        )
         return [(int(r["id"]), str(r["name"])) for r in rows]
 
     async def list_services_by_category(
