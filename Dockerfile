@@ -11,4 +11,4 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY . /app
 
-CMD ["python", "-m", "app.main"]
+CMD ["sh", "-c", "echo 'Migration hold: container built successfully'; exec sleep infinity"]
